@@ -6,6 +6,7 @@ import vertex from '../shaders/vertex.glsl?raw';
 import fragment from '../shaders/fragment.glsl?raw';
 import asciiVertex from '../shaders/ascii-vertex.glsl?raw';
 import asciiFragment from '../shaders/ascii-fragment.glsl?raw';
+import redCircleFragment from '../shaders/red-circle-fragment.glsl?raw';
 
 // ------------------------------
 // Renderer & GL Setup
@@ -13,6 +14,8 @@ import asciiFragment from '../shaders/ascii-fragment.glsl?raw';
 const renderer = new Renderer();
 const gl = renderer.gl;
 document.body.appendChild(gl.canvas);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
 // ------------------------------
 // Camera
@@ -27,10 +30,9 @@ const mouse = new Vec2();
 let lastMoveTime = performance.now();
 
 function updateMouse(e) {
-  const rect = gl.canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) / rect.width;
-  const y = 1 - (e.clientY - rect.top) / rect.height;
-
+  const x = (e.clientX / window.innerWidth);
+  const y = 1 - (e.clientY / window.innerHeight);
+  
   lastMoveTime = performance.now();
 
   gsap.to(mouse, {
@@ -39,6 +41,16 @@ function updateMouse(e) {
     duration: 0.4,
     ease: "expoScale(0.5,7,none)"
   });
+  
+  // Update mouse pixel position
+  // Must account for actual canvas resolution (devicePixelRatio)
+  if (perlinProgram && asciiProgram && redCircleProgram) {
+    const dpr = renderer.dpr || window.devicePixelRatio || 1;
+    const pixel = [e.clientX * dpr, (window.innerHeight - e.clientY) * dpr];
+    perlinProgram.uniforms.uMousePixel.value = pixel;
+    asciiProgram.uniforms.uMousePixel.value = pixel;
+    redCircleProgram.uniforms.uMousePixel.value = pixel;
+  }
 }
 
 window.addEventListener('mousemove', updateMouse);
@@ -52,6 +64,7 @@ function resize() {
 
   perlinProgram.uniforms.uResolution.value = [gl.canvas.width, gl.canvas.height];
   asciiProgram.uniforms.uResolution.value = [gl.canvas.width, gl.canvas.height];
+  redCircleProgram.uniforms.uResolution.value = [gl.canvas.width, gl.canvas.height];
 }
 
 window.addEventListener('resize', resize);
@@ -68,6 +81,7 @@ const perlinProgram = new Program(gl, {
     uSpeed: { value: 0.1 },
     uValue: { value: 0.9 },
     uMouseOverPos: { value: mouse },
+    uMousePixel: { value: [0, 0] },
     uResolution: { value: [gl.canvas.width, gl.canvas.height] },
     uActivity: { value: 0 }
   }
@@ -86,16 +100,43 @@ const renderTarget = new RenderTarget(gl);
 // ------------------------------
 const asciiProgram = new Program(gl, {
   vertex: asciiVertex,
-  fragment: asciiFragment,
+  fragment: resolveLygia(asciiFragment),
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
   uniforms: {
     uResolution: { value: [gl.canvas.width, gl.canvas.height] },
     uTexture: { value: renderTarget.texture },
+    uMousePixel: { value: [0, 0] },
+    uCircleRadius: { value: 160.0 },
+    uTime: { value: 0 },
   }
 });
 
 const asciiMesh = new Mesh(gl, {
   geometry: new Plane(gl, { width: 2, height: 2 }),
   program: asciiProgram,
+});
+
+// ------------------------------
+// Red Circle Shader & Mesh
+// ------------------------------
+const redCircleProgram = new Program(gl, {
+  vertex,
+  fragment: redCircleFragment,
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
+  uniforms: {
+    uResolution: { value: [gl.canvas.width, gl.canvas.height] },
+    uMousePixel: { value: [0, 0] },
+    uRadius: { value: 160.0 },
+  }
+});
+
+const redCircleMesh = new Mesh(gl, {
+  geometry: new Plane(gl, { width: 2, height: 2 }),
+  program: redCircleProgram,
 });
 
 // ------------------------------
@@ -117,10 +158,11 @@ function animate(time) {
 
   const elapsedTime = time * 0.001;
   perlinProgram.uniforms.uTime.value = elapsedTime;
+  asciiProgram.uniforms.uTime.value = elapsedTime;
 
   // Update activity based on mouse idle
-  const idleTime = (performance.now() - lastMoveTime) / 1000; // seconds
-  const fadeDuration = 5; // seconds until fully idle
+  const idleTime = (performance.now() - lastMoveTime) / 1000; // convert to seconds
+  const fadeDuration = 3;
   const targetActivity = Math.max(0, 1 - idleTime / fadeDuration);
 
   // Smoothly animate activity using GSAP
@@ -136,8 +178,11 @@ function animate(time) {
   // 1. Render Perlin shader to render target
   renderer.render({ scene: perlinMesh, camera, target: renderTarget });
 
-  // 2. Render ASCII shader to screen
-  renderer.render({ scene: asciiMesh, camera });
+  // 2. Render red circle underneath
+  renderer.render({ scene: redCircleMesh, camera });
+
+  // 3. Render ASCII shader on top with transparency
+  renderer.render({ scene: asciiMesh, camera, clear: false });
 }
 
 // ------------------------------

@@ -5,6 +5,9 @@ uniform float uTime;
 uniform float uSpeed;
 uniform float uValue;
 uniform vec2 uMouseOverPos;
+uniform vec2 uMousePixel;
+uniform vec2 uResolution;
+uniform float uActivity;
 
 in vec2 vUv;
 out vec4 fragColor;
@@ -23,5 +26,7 @@ void main() {
 
   float hue = abs(cnoise(vec3(vUv * uFrequency, uTime * uSpeed)));
   vec3 rainbowColor = hsv2rgb(vec3(hue, 1.0, uValue));
-  fragColor = vec4(rainbowColor, 1.0);
+  
+  // Fade brightness based on activity (0 = idle/dark, 1 = active/bright)
+  fragColor = vec4(rainbowColor * uActivity, 1.0);
 }
