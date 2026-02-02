@@ -4,6 +4,8 @@ uniform float uFrequency;
 uniform float uTime;
 uniform float uSpeed;
 uniform float uValue;
+uniform vec2 uMouseOverPos;
+
 in vec2 vUv;
 out vec4 fragColor;
 
@@ -16,6 +18,9 @@ vec3 hsv2rgb(vec3 c) {
 }
 
 void main() {
+  vec2 mouse = uMouseOverPos;
+  float mouseDistance = distance(vUv, mouse);
+
   float hue = abs(cnoise(vec3(vUv * uFrequency, uTime * uSpeed)));
   vec3 rainbowColor = hsv2rgb(vec3(hue, 1.0, uValue));
   fragColor = vec4(rainbowColor, 1.0);
