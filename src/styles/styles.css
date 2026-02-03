@@ -191,3 +191,20 @@ canvas {
     max-width: 300px;
   }
 }
+
+.page {
+  position: relative;
+  width: 100%;
+  height : 200vh;
+
+  &:after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    background: linear-gradient(90deg, #0000ff 0%, #00ff00 100%);
+  }
+}

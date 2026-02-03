@@ -2,8 +2,7 @@
 precision highp float;
 uniform vec2 uResolution;
 uniform sampler2D uTexture;
-uniform vec2 uMousePixel;
-uniform float uCircleRadius;
+uniform sampler2D uMask;
 out vec4 fragColor;
 
 float character(int n, vec2 p) {
@@ -36,7 +35,6 @@ void main() {
   float glyph = character(n, p);
   col = col * glyph;
 
-  float dist = distance(pix, uMousePixel);
-  float mask = smoothstep(uCircleRadius, uCircleRadius - 12.0, dist);
+  float mask = texture(uMask, pix / uResolution.xy).r;
   fragColor = vec4(col * mask, 0.25 * glyph * mask);
 }
