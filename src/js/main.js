@@ -127,7 +127,7 @@ const renderTarget = new RenderTarget(gl);
 // ------------------------------
 const simRes = 128;
 const dyeRes = 256;
-const iterations = 2;
+const iterations = 4;
 const densityDissipation = 0.9;
 const velocityDissipation = 0.5;
 const pressureDissipation = 0.8;
@@ -431,6 +431,48 @@ const asciiMesh = new Mesh(gl, {
 
 
 // ------------------------------
+// Blue Fluid Display Shader
+// ------------------------------
+const blueFluidVertex = `#version 300 es
+  in vec2 position;
+  in vec2 uv;
+  out vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position, 0, 1);
+  }
+`;
+
+const blueFluidFragment = `#version 300 es
+  precision highp float;
+  uniform sampler2D uTexture;
+  in vec2 vUv;
+  out vec4 fragColor;
+  
+  void main() {
+    vec3 fluid = texture(uTexture, vUv).rgb;
+    float intensity = length(fluid);
+    // Pure blue only, no red or green, clamped to max 1.0
+    vec3 blue = vec3(0.0, 0.0, min(intensity, 1.0));
+    fragColor = vec4(blue, intensity * 0.5);
+  }
+`;
+
+const blueFluidProgram = new Program(gl, {
+  vertex: blueFluidVertex,
+  fragment: blueFluidFragment,
+  transparent: true,
+  uniforms: {
+    uTexture: { value: density.read.texture }
+  }
+});
+
+const blueFluidMesh = new Mesh(gl, {
+  geometry: new Plane(gl, { width: 2, height: 2 }),
+  program: blueFluidProgram
+});
+
+// ------------------------------
 // Frame Rate Control
 // ------------------------------
 const targetFPS = 30;
@@ -514,15 +556,22 @@ function animate(time) {
   renderer.autoClear = true;
 
   asciiProgram.uniforms.uMask.value = density.read.texture;
+  blueFluidProgram.uniforms.uTexture.value = density.read.texture;
 
   // ------------------------------
   // Render Passes
   // ------------------------------
-  // 1. Render Perlin shader to render target
+  // Clear and render perlin to render target first
   renderer.render({ scene: perlinMesh, camera, target: renderTarget });
-
-  // 2. Render ASCII shader on top with fluid mask
-  renderer.render({ scene: asciiMesh, camera });
+  
+  // Render blue fluid to screen (underneath ASCII)
+  renderer.autoClear = false;
+  renderer.render({ scene: blueFluidMesh });
+  
+  // Render ASCII on top
+  renderer.render({ scene: asciiMesh });
+  
+  renderer.autoClear = true;
 }
 
 // ------------------------------

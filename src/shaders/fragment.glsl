@@ -24,9 +24,11 @@ void main() {
   vec2 mouse = uMouseOverPos;
   float mouseDistance = distance(vUv, mouse);
 
-  float hue = abs(cnoise(vec3(vUv * uFrequency, uTime * uSpeed)));
-  vec3 rainbowColor = hsv2rgb(vec3(hue, 1.0, uValue));
+  float noise = abs(cnoise(vec3(vUv * uFrequency - 0.25, uTime * uSpeed)));
   
-  // Fade brightness based on activity (0 = idle/dark, 1 = active/bright)
-  fragColor = vec4(rainbowColor * uActivity, 1.0);
+  // Dark to light based on noise
+  vec3 color = vec3(noise * 0.6);
+  
+  // Modulate with activity
+  fragColor = vec4(color * uActivity, 1.0);
 }
