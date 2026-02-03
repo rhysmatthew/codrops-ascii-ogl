@@ -168,7 +168,6 @@ canvas {
   /* Optional border or shadow for aesthetic */
   border: 1px solid #444;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  opacity: 0.75;
 }
 
 @media screen and (min-width: 53em) {
@@ -197,6 +196,7 @@ canvas {
   position: relative;
   width: 100%;
   height : 200vh;
+  overflow: hidden;
 
   &:after {
     content: '';
@@ -206,6 +206,6 @@ canvas {
     width: 100vw;
     height: 100vh;
     pointer-events: none;
-    background: linear-gradient(90deg, #0000ff 0%, #00ff00 100%);
+    background: linear-gradient(90deg, #0000ff 0%, #0000ff 100%);
   }
 }

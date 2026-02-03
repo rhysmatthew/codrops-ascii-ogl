@@ -126,9 +126,9 @@ const renderTarget = new RenderTarget(gl);
 // Fluid Simulation (mask)
 // ------------------------------
 const simRes = 128;
-const dyeRes = 256;
+const dyeRes = 1024;
 const iterations = 4;
-const densityDissipation = 0.9;
+const densityDissipation = 0.75;
 const velocityDissipation = 0.5;
 const pressureDissipation = 0.8;
 const curlStrength = 10;
@@ -343,7 +343,7 @@ const vorticityProgram = new Mesh(gl, {
       uVelocity: { value: null },
       uCurl: { value: null },
       curl: { value: curlStrength },
-      dt: { value: 0.016 },
+      dt: { value: 0.05 },
     },
     depthTest: false,
     depthWrite: false,
@@ -452,9 +452,13 @@ const blueFluidFragment = `#version 300 es
   void main() {
     vec3 fluid = texture(uTexture, vUv).rgb;
     float intensity = length(fluid);
-    // Pure blue only, no red or green, clamped to max 1.0
-    vec3 blue = vec3(0.0, 0.0, min(intensity, 1.0));
-    fragColor = vec4(blue, intensity * 0.5);
+    
+    // Create soft, faded edges by applying power curve to intensity
+    // This makes low intensity areas fade to transparent more gradually
+    float softEdge = pow(intensity, 0.1);
+    
+    vec3 blue = vec3(0.0, 0.0, softEdge);
+    fragColor = vec4(blue, softEdge * 0.8);
   }
 `;
 
