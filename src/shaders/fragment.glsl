@@ -12,32 +12,50 @@ uniform float uActivity;
 in vec2 vUv;
 out vec4 fragColor;
 
-#include "lygia/generative/cnoise.glsl"
-
-vec3 hsv2rgb(vec3 c) {
-  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+vec2 random2(vec2 p) {
+  return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
 }
 
 void main() {
-  vec2 mouse = uMouseOverPos;
-  float mouseDistance = distance(vUv, mouse);
-
-  // Create flowing wave pattern
-  vec2 flowDirection = vec2(1.0, 0.3); // Direction of wave flow
-  float timeOffset = uTime * uSpeed;
+  vec2 st = vUv;
+  st.x *= uResolution.x / uResolution.y;
   
-  // Layer multiple noise octaves for wave-like effect
-  float wave1 = cnoise(vec3(vUv * uFrequency + flowDirection * timeOffset, timeOffset * 0.5));
-  float wave2 = cnoise(vec3(vUv * uFrequency * 2.0 + flowDirection * timeOffset * 1.5, timeOffset * 0.3)) * 0.5;
-  float wave3 = cnoise(vec3(vUv * uFrequency * 0.5 + flowDirection * timeOffset * 0.7, timeOffset * 0.2)) * 0.25;
+  // Scale by frequency
+  st *= uFrequency;
   
-  float noise = (wave1 + wave2 + wave3) * 0.5 + 0.5; // Normalize to 0-1 range
+  // Tile the space
+  vec2 i_st = floor(st);
+  vec2 f_st = fract(st);
   
-  // Dark to light based on noise
-  vec3 color = vec3(noise * 0.6);
+  float m_dist = 1.0;  // minimum distance
   
-  // Modulate with activity
-  fragColor = vec4(color * uActivity, 1.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      // Neighbor place in the grid
+      vec2 neighbor = vec2(float(i), float(j));
+      
+      // Random position from current + neighbor place in the grid
+      vec2 offset = random2(i_st + neighbor);
+      
+      // Animate the offset slowly
+      offset = 0.5 + 0.5 * sin(uTime * uSpeed * 0.5 + 6.2831 * offset);
+      
+      // Position of the cell
+      vec2 pos = neighbor + offset - f_st;
+      
+      // Cell distance
+      float dist = length(pos);
+      
+      // Metaball it!
+      m_dist = min(m_dist, m_dist * dist);
+    }
+  }
+  
+  // Create gradient from metaball field
+  float value = 1.0 - smoothstep(0.0, 0.7, m_dist);
+  
+  // Subtle dark gradient
+  vec3 color = vec3(value * 0.5);
+  
+  fragColor = vec4(color, 1.0);
 }

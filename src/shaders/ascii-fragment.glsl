@@ -23,26 +23,26 @@ float character(int n, vec2 p) {
 void main() {
   vec2 pix = gl_FragCoord.xy;
   
-  vec3 col = texture(uTexture, floor(pix / 12.0) * 12.0 / uResolution.xy).rgb;
+  vec3 col = texture(uTexture, floor(pix / 32.0) * 32.0 / uResolution.xy).rgb;
   float gray = 0.3 * col.r + 0.5 * col.g + 0.11 * col.b;
   
   // Use noise-based brightness determination
   float noise = abs(cnoise(vec3(pix / 128.0, uTime * 0.5)));
   float brightness = gray + noise * 0.3;
   
-  int n = 33408895;
-  n = 33408895;
-  if(brightness > 0.1) n = 29338619;
-  if(brightness > 0.2) n = 22369621;
-  if(brightness > 0.3) n = 23047157;
-  if(brightness > 0.4) n = 4685252;
-  if(brightness > 0.5) n = 33084991;
-  if(brightness > 0.6) n = 33084991;
+  int n = 2228360;
+  n = 2228360;
+  if(brightness > 0.1) n = 2228360;
+  if(brightness > 0.2) n = 8519810;
+  if(brightness > 0.3) n = 272448;
+  if(brightness > 0.4) n = 272448;
+  if(brightness > 0.5) n = 272448;
+  if(brightness > 0.6) n = 272448;
   
-  vec2 p = mod(pix / 6.0, 2.0) - vec2(1.0);
+  vec2 p = mod(pix / 4.0, 2.0) - vec2(1.0);
   
   float glyph = character(n, p);
-  col = vec3(0.0); // All black
+  col = vec3(0.005, 0.025, 0.1225); // All black
   col = col * glyph;
 
   float mask = texture(uMask, pix / uResolution.xy).r;

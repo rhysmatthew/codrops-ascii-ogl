@@ -1,6 +1,7 @@
 import { Camera, Mesh, Plane, Program, Renderer, RenderTarget, Vec2, Geometry, Color } from 'ogl';
 import { resolveLygia } from 'resolve-lygia';
 import { gsap } from 'gsap';
+import GUI from 'lil-gui';
 
 import vertex from '../shaders/vertex.glsl?raw';
 import fragment from '../shaders/fragment.glsl?raw';
@@ -24,7 +25,7 @@ const gl = renderer.gl;
 document.body.appendChild(gl.canvas);
 gl.clearColor(0, 0, 0, 0);
 gl.enable(gl.BLEND);
-gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
 // ------------------------------
 // Camera
@@ -104,7 +105,7 @@ const perlinProgram = new Program(gl, {
   fragment: resolveLygia(fragment),
   uniforms: {
     uTime: { value: 0 },
-    uFrequency: { value: 3.0 },
+    uFrequency: { value: 0.5 },
     uSpeed: { value: 0.1 },
     uValue: { value: 0.9 },
     uMouseOverPos: { value: mouse },
@@ -125,16 +126,36 @@ const renderTarget = new RenderTarget(gl);
 // ------------------------------
 // Fluid Simulation (mask)
 // ------------------------------
-const simRes = 128;
-const dyeRes = 1024;
-const iterations = 4;
-const densityDissipation = 0.75;
-const velocityDissipation = 0.5;
-const pressureDissipation = 0.8;
-const curlStrength = 10;
-const radius = 0.5;
+const fluidSettings = {
+  simRes: 128,
+  dyeRes: 1024,
+  iterations: 4,
+  decay: 0.896,
+  velocityDissipation: 0.6,
+  pressureDissipation: 0.85,
+  curlStrength: 10,
+  radius: 0.5,
+};
 
-const texelSize = { value: new Vec2(1 / simRes, 1 / simRes) };
+let texelSize;
+let density;
+let velocity;
+let pressure;
+let divergence;
+let curl;
+let clearProgram;
+let splatProgram;
+let advectionProgram;
+let divergenceProgram;
+let curlProgram;
+let vorticityProgram;
+let pressureProgram;
+let gradientSubtractProgram;
+
+const triangle = new Geometry(gl, {
+  position: { size: 2, data: new Float32Array([-1, -1, 3, -1, -1, 3]) },
+  uv: { size: 2, data: new Float32Array([0, 0, 2, 0, 0, 2]) },
+});
 
 function supportRenderTextureFormat(gl, internalFormat, format, type) {
   const texture = gl.createTexture();
@@ -181,203 +202,230 @@ function createDoubleFBO(gl, { width, height, wrapS, wrapT, minFilter = gl.LINEA
   return fbo;
 }
 
-const supportLinearFiltering = gl.renderer.extensions[`OES_texture_${gl.renderer.isWebgl2 ? `` : `half_`}float_linear`];
-const halfFloat = gl.renderer.isWebgl2 ? gl.HALF_FLOAT : gl.renderer.extensions['OES_texture_half_float'].HALF_FLOAT_OES;
-const filtering = supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
+function setupFluid() {
+  const supportLinearFiltering = gl.renderer.extensions[`OES_texture_${gl.renderer.isWebgl2 ? `` : `half_`}float_linear`];
+  const halfFloat = gl.renderer.isWebgl2 ? gl.HALF_FLOAT : gl.renderer.extensions['OES_texture_half_float'].HALF_FLOAT_OES;
+  const filtering = supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
 
-let rgba;
-let rg;
-let r;
+  let rgba;
+  let rg;
+  let r;
 
-if (gl.renderer.isWebgl2) {
-  rgba = getSupportedFormat(gl, gl.RGBA16F, gl.RGBA, halfFloat);
-  rg = getSupportedFormat(gl, gl.RG16F, gl.RG, halfFloat);
-  r = getSupportedFormat(gl, gl.R16F, gl.RED, halfFloat);
-} else {
-  rgba = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloat);
-  rg = rgba;
-  r = rgba;
+  if (gl.renderer.isWebgl2) {
+    rgba = getSupportedFormat(gl, gl.RGBA16F, gl.RGBA, halfFloat);
+    rg = getSupportedFormat(gl, gl.RG16F, gl.RG, halfFloat);
+    r = getSupportedFormat(gl, gl.R16F, gl.RED, halfFloat);
+  } else {
+    rgba = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloat);
+    rg = rgba;
+    r = rgba;
+  }
+
+  texelSize = { value: new Vec2(1 / fluidSettings.simRes, 1 / fluidSettings.simRes) };
+
+  density = createDoubleFBO(gl, {
+    width: fluidSettings.dyeRes,
+    height: fluidSettings.dyeRes,
+    type: halfFloat,
+    format: rgba?.format,
+    internalFormat: rgba?.internalFormat,
+    minFilter: filtering,
+    depth: false,
+  });
+
+  velocity = createDoubleFBO(gl, {
+    width: fluidSettings.simRes,
+    height: fluidSettings.simRes,
+    type: halfFloat,
+    format: rg?.format,
+    internalFormat: rg?.internalFormat,
+    minFilter: filtering,
+    depth: false,
+  });
+
+  pressure = createDoubleFBO(gl, {
+    width: fluidSettings.simRes,
+    height: fluidSettings.simRes,
+    type: halfFloat,
+    format: r?.format,
+    internalFormat: r?.internalFormat,
+    minFilter: gl.NEAREST,
+    depth: false,
+  });
+
+  divergence = new RenderTarget(gl, {
+    width: fluidSettings.simRes,
+    height: fluidSettings.simRes,
+    type: halfFloat,
+    format: r?.format,
+    internalFormat: r?.internalFormat,
+    minFilter: gl.NEAREST,
+    depth: false,
+  });
+
+  curl = new RenderTarget(gl, {
+    width: fluidSettings.simRes,
+    height: fluidSettings.simRes,
+    type: halfFloat,
+    format: r?.format,
+    internalFormat: r?.internalFormat,
+    minFilter: gl.NEAREST,
+    depth: false,
+  });
+
+  clearProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidClearFragment,
+      uniforms: {
+        texelSize,
+        uTexture: { value: null },
+        value: { value: fluidSettings.pressureDissipation },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  splatProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidSplatFragment,
+      uniforms: {
+        texelSize,
+        uTarget: { value: null },
+        aspectRatio: { value: 1 },
+        color: { value: new Color() },
+        point: { value: new Vec2() },
+        radius: { value: fluidSettings.radius / 100 },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  advectionProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidAdvectionFragment,
+      uniforms: {
+        texelSize,
+        dyeTexelSize: { value: new Vec2(1 / fluidSettings.dyeRes, 1 / fluidSettings.dyeRes) },
+        uVelocity: { value: null },
+        uSource: { value: null },
+        dt: { value: 0.016 },
+        dissipation: { value: 1 },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  divergenceProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidDivergenceFragment,
+      uniforms: {
+        texelSize,
+        uVelocity: { value: null },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  curlProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidCurlFragment,
+      uniforms: {
+        texelSize,
+        uVelocity: { value: null },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  vorticityProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidVorticityFragment,
+      uniforms: {
+        texelSize,
+        uVelocity: { value: null },
+        uCurl: { value: null },
+        curl: { value: fluidSettings.curlStrength },
+        dt: { value: 0.05 },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  pressureProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidPressureFragment,
+      uniforms: {
+        texelSize,
+        uPressure: { value: null },
+        uDivergence: { value: null },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
+
+  gradientSubtractProgram = new Mesh(gl, {
+    geometry: triangle,
+    program: new Program(gl, {
+      vertex: fluidBaseVertex,
+      fragment: fluidGradientSubtractFragment,
+      uniforms: {
+        texelSize,
+        uPressure: { value: null },
+        uVelocity: { value: null },
+      },
+      depthTest: false,
+      depthWrite: false,
+    }),
+  });
 }
 
-const density = createDoubleFBO(gl, {
-  width: dyeRes,
-  height: dyeRes,
-  type: halfFloat,
-  format: rgba?.format,
-  internalFormat: rgba?.internalFormat,
-  minFilter: filtering,
-  depth: false,
-});
+setupFluid();
 
-const velocity = createDoubleFBO(gl, {
-  width: simRes,
-  height: simRes,
-  type: halfFloat,
-  format: rg?.format,
-  internalFormat: rg?.internalFormat,
-  minFilter: filtering,
-  depth: false,
-});
+const gui = new GUI();
+gui.title('Fluid');
 
-const pressure = createDoubleFBO(gl, {
-  width: simRes,
-  height: simRes,
-  type: halfFloat,
-  format: r?.format,
-  internalFormat: r?.internalFormat,
-  minFilter: gl.NEAREST,
-  depth: false,
-});
+gui.add(perlinProgram.uniforms.uFrequency, 'value', 0.1, 10, 0.1).name('perlinFrequency');
 
-const divergence = new RenderTarget(gl, {
-  width: simRes,
-  height: simRes,
-  type: halfFloat,
-  format: r?.format,
-  internalFormat: r?.internalFormat,
-  minFilter: gl.NEAREST,
-  depth: false,
+gui.add(fluidSettings, 'simRes', 32, 512, 1).onFinishChange(setupFluid);
+gui.add(fluidSettings, 'dyeRes', 128, 2048, 1).onFinishChange(setupFluid);
+gui.add(fluidSettings, 'iterations', 1, 20, 1);
+gui.add(fluidSettings, 'decay', 0.5, 1, 0.001);
+gui.add(fluidSettings, 'velocityDissipation', 0.1, 1, 0.001);
+gui.add(fluidSettings, 'pressureDissipation', 0.5, 1, 0.001).onChange((value) => {
+  if (clearProgram) {
+    clearProgram.program.uniforms.value.value = value;
+  }
 });
-
-const curl = new RenderTarget(gl, {
-  width: simRes,
-  height: simRes,
-  type: halfFloat,
-  format: r?.format,
-  internalFormat: r?.internalFormat,
-  minFilter: gl.NEAREST,
-  depth: false,
+gui.add(fluidSettings, 'curlStrength', 0, 50, 0.1).onChange((value) => {
+  if (vorticityProgram) {
+    vorticityProgram.program.uniforms.curl.value = value;
+  }
 });
-
-const triangle = new Geometry(gl, {
-  position: { size: 2, data: new Float32Array([-1, -1, 3, -1, -1, 3]) },
-  uv: { size: 2, data: new Float32Array([0, 0, 2, 0, 0, 2]) },
-});
-
-const clearProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidClearFragment,
-    uniforms: {
-      texelSize,
-      uTexture: { value: null },
-      value: { value: pressureDissipation },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const splatProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidSplatFragment,
-    uniforms: {
-      texelSize,
-      uTarget: { value: null },
-      aspectRatio: { value: 1 },
-      color: { value: new Color() },
-      point: { value: new Vec2() },
-      radius: { value: radius / 100 },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const advectionProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidAdvectionFragment,
-    uniforms: {
-      texelSize,
-      dyeTexelSize: { value: new Vec2(1 / dyeRes, 1 / dyeRes) },
-      uVelocity: { value: null },
-      uSource: { value: null },
-      dt: { value: 0.016 },
-      dissipation: { value: 1 },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const divergenceProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidDivergenceFragment,
-    uniforms: {
-      texelSize,
-      uVelocity: { value: null },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const curlProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidCurlFragment,
-    uniforms: {
-      texelSize,
-      uVelocity: { value: null },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const vorticityProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidVorticityFragment,
-    uniforms: {
-      texelSize,
-      uVelocity: { value: null },
-      uCurl: { value: null },
-      curl: { value: curlStrength },
-      dt: { value: 0.05 },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const pressureProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidPressureFragment,
-    uniforms: {
-      texelSize,
-      uPressure: { value: null },
-      uDivergence: { value: null },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
-});
-
-const gradientSubtractProgram = new Mesh(gl, {
-  geometry: triangle,
-  program: new Program(gl, {
-    vertex: fluidBaseVertex,
-    fragment: fluidGradientSubtractFragment,
-    uniforms: {
-      texelSize,
-      uPressure: { value: null },
-      uVelocity: { value: null },
-    },
-    depthTest: false,
-    depthWrite: false,
-  }),
+gui.add(fluidSettings, 'radius', 0.1, 3, 0.01).onChange((value) => {
+  if (splatProgram) {
+    splatProgram.program.uniforms.radius.value = value / 100;
+  }
 });
 
 function splat({ x, y, dx, dy }) {
@@ -421,6 +469,9 @@ const asciiProgram = new Program(gl, {
     uResolution: { value: [gl.canvas.width, gl.canvas.height] },
     uTexture: { value: renderTarget.texture },
     uMask: { value: density.read.texture },
+    uPerlin: { value: renderTarget.texture },
+    uDistortionStrength: { value: 0.015 },
+    uTime: { value: 0 }
   }
 });
 
@@ -453,28 +504,27 @@ const blueFluidFragment = `#version 300 es
     vec3 fluid = texture(uTexture, vUv).rgb;
     float intensity = length(fluid);
     
-    // Create soft, faded edges by applying power curve to intensity
-    // This makes low intensity areas fade to transparent more gradually
-    float softEdge = pow(intensity, 0.1);
+    float softEdge = pow(intensity, 2.0);
     
-    vec3 blue = vec3(0.0, 0.0, softEdge);
-    fragColor = vec4(blue, softEdge * 0.8);
+    // Use constant blue, not intensity-based
+    vec3 blue = vec3(0.0, 0.0, 0.25);
+    fragColor = vec4(blue, softEdge);
   }
 `;
 
-const blueFluidProgram = new Program(gl, {
-  vertex: blueFluidVertex,
-  fragment: blueFluidFragment,
-  transparent: true,
-  uniforms: {
-    uTexture: { value: density.read.texture }
-  }
-});
+// const blueFluidProgram = new Program(gl, {
+//   vertex: blueFluidVertex,
+//   fragment: blueFluidFragment,
+//   transparent: true,
+//   uniforms: {
+//     uTexture: { value: density.read.texture }
+//   }
+// });
 
-const blueFluidMesh = new Mesh(gl, {
-  geometry: new Plane(gl, { width: 2, height: 2 }),
-  program: blueFluidProgram
-});
+// const blueFluidMesh = new Mesh(gl, {
+//   geometry: new Plane(gl, { width: 2, height: 2 }),
+//   program: blueFluidProgram
+// });
 
 // ------------------------------
 // Frame Rate Control
@@ -495,6 +545,7 @@ function animate(time) {
 
   const elapsedTime = time * 0.001;
   perlinProgram.uniforms.uTime.value = elapsedTime;
+  asciiProgram.uniforms.uTime.value = elapsedTime;
 
   // movementActivity is updated on mouse events using velocity
 
@@ -532,7 +583,7 @@ function animate(time) {
   pressure.swap();
 
   pressureProgram.program.uniforms.uDivergence.value = divergence.texture;
-  for (let i = 0; i < iterations; i++) {
+  for (let i = 0; i < fluidSettings.iterations; i++) {
     pressureProgram.program.uniforms.uPressure.value = pressure.read.texture;
     renderer.render({ scene: pressureProgram, target: pressure.write, sort: false, update: false });
     pressure.swap();
@@ -543,24 +594,24 @@ function animate(time) {
   renderer.render({ scene: gradientSubtractProgram, target: velocity.write, sort: false, update: false });
   velocity.swap();
 
-  advectionProgram.program.uniforms.dyeTexelSize.value.set(1 / simRes);
+  advectionProgram.program.uniforms.dyeTexelSize.value.set(1 / fluidSettings.simRes);
   advectionProgram.program.uniforms.uVelocity.value = velocity.read.texture;
   advectionProgram.program.uniforms.uSource.value = velocity.read.texture;
-  advectionProgram.program.uniforms.dissipation.value = velocityDissipation;
+  advectionProgram.program.uniforms.dissipation.value = fluidSettings.velocityDissipation;
   renderer.render({ scene: advectionProgram, target: velocity.write, sort: false, update: false });
   velocity.swap();
 
-  advectionProgram.program.uniforms.dyeTexelSize.value.set(1 / dyeRes);
+  advectionProgram.program.uniforms.dyeTexelSize.value.set(1 / fluidSettings.dyeRes);
   advectionProgram.program.uniforms.uVelocity.value = velocity.read.texture;
   advectionProgram.program.uniforms.uSource.value = density.read.texture;
-  advectionProgram.program.uniforms.dissipation.value = densityDissipation;
+  advectionProgram.program.uniforms.dissipation.value = fluidSettings.decay;
   renderer.render({ scene: advectionProgram, target: density.write, sort: false, update: false });
   density.swap();
 
   renderer.autoClear = true;
 
   asciiProgram.uniforms.uMask.value = density.read.texture;
-  blueFluidProgram.uniforms.uTexture.value = density.read.texture;
+  // blueFluidProgram.uniforms.uTexture.value = density.read.texture;
 
   // ------------------------------
   // Render Passes
@@ -569,8 +620,8 @@ function animate(time) {
   renderer.render({ scene: perlinMesh, camera, target: renderTarget });
   
   // Render blue fluid to screen (underneath ASCII)
-  renderer.autoClear = false;
-  renderer.render({ scene: blueFluidMesh });
+  // renderer.autoClear = false;
+  // renderer.render({ scene: blueFluidMesh });
   
   // Render ASCII on top
   renderer.render({ scene: asciiMesh });
